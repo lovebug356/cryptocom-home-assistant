@@ -1,0 +1,13 @@
+{
+  "domain": "cryptocom",
+  "name": "Crypto.com",
+  "config_flow": false,
+  "documentation": "https://www.home-assistant.io/integrations/cryptocom",
+  "requirements": ["ccxt==2.4.47"],
+  "ssdp": [],
+  "zeroconf": [],
+  "homekit": {},
+  "dependencies": [],
+  "codeowners": ["@lovebug356"],
+  "iot_class": "cloud_polling"
+}
