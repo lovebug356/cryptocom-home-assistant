@@ -8,12 +8,13 @@ from typing import Dict, Optional
 from ccxt.base.errors import BadSymbol
 
 from homeassistant.components.sensor import SensorEntity, PLATFORM_SCHEMA
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.helpers.config_validation as cv
 
-from .data import CryptoComData
+from .data import CryptoComData, CryptoComDataCoordinator
 from .const import CONF_TICKERS, CONF_TICKER_SYMBOL, DOMAIN
 from .utils import round_with_precision
 from .market_symbol import MarketSymbol
@@ -48,23 +49,21 @@ async def async_setup_platform(
         config_symbol = data[CONF_TICKER_SYMBOL]
         try:
             symbol = MarketSymbol.try_from_string(config_symbol)
-            sensors.append(LastPriceSensor(cryptocom_data, symbol))
+            sensors.append(LastPriceSensor(cryptocom_data.coordinator, symbol))
         except:
             _LOGGER.warn(f"failed to parse '{config_symbol}' as valid market symbol")
 
     add_entities(sensors, update_before_add=True)
 
-class LastPriceSensor(SensorEntity):
+class LastPriceSensor(CoordinatorEntity, SensorEntity):
     """Representation of a ticker sensor."""
 
-    def __init__(self, cryptocom_data: CryptoComData, market_symbol: MarketSymbol) -> None:
+    def __init__(self, coordinator: CryptoComDataCoordinator, market_symbol: MarketSymbol) -> None:
         """Initialize the sensor."""
-        super().__init__()
-        self._cryptocom_data = cryptocom_data
+        super().__init__(coordinator)
         self._market_symbol = market_symbol
         self._name = f"{self._market_symbol.name}_last_price"
         self._state = None
-        self._available = True
 
     @property
     def unique_id(self) -> str:
@@ -98,19 +97,7 @@ class LastPriceSensor(SensorEntity):
         else:
             return "mdi:cash"
 
-    @property
-    def available(self) -> bool:
-        return self._available
-
-    async def async_update(self) -> None:
-        """Fetch new state data for the sensor.
-
-        This is the only method that should fetch new data for Home Assistant.
-        """
-        try:
-            ticker = await self._cryptocom_data.exchange.fetch_ticker(self._market_symbol.ccxt_symbol)
-            precision = self._cryptocom_data.fetch_price_precision(self._market_symbol.ccxt_symbol)
-            self._state = round_with_precision(ticker['last'], precision)
-        except BadSymbol as err:
-            _LOGGER.error(f"{err}")
-            self._available = False
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._state = self.coordinator.fetch_last_price(self._market_symbol)
+        self.async_write_ha_state()
