@@ -16,14 +16,19 @@ from .utils import round_with_precision
 _LOGGER = logging.getLogger(__name__)
 
 class CryptoComData:
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, api_key: Optional[str] = None, secret: Optional[str] = None) -> None:
         self.hass = hass
         self.exchange = ccxt.cryptocom({
+            'apiKey': api_key,
+            'secret': secret,
             'rateLimit': 200,
             'asyncio_loop': hass.loop
         })
         self._markets = []
         self.tickers_coordinator = TickersCoordinator(self.hass, self.exchange)
+        self.balance_coordinator: Optional[BalanceCoordinator] = None
+        if api_key is not None and secret is not None:
+            self.balance_coordinator = BalanceCoordinator(self.hass, self.exchange)
         self._candlesticks_coordinator = {}
 
     async def async_setup(self) -> None:
@@ -50,6 +55,13 @@ class CryptoComData:
             precision = 0.01
         return round_with_precision(value, precision)
 
+class BalanceCoordinator(DataUpdateCoordinator):
+    def __init__(self, hass, exchange: ccxt.cryptocom):
+        super().__init__(hass, _LOGGER, name="cryptocom", update_interval=timedelta(minutes=11))
+        self.exchange = exchange
+
+    async def _async_update_data(self):
+        return await self.exchange.fetch_balance()
 
 class TickersCoordinator(DataUpdateCoordinator):
     def __init__(self, hass, exchange: ccxt.cryptocom):

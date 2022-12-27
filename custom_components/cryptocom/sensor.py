@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.helpers.config_validation as cv
 
 from .data import CryptoComData
-from .const import CONF_TICKERS, CONF_TICKER_SYMBOL, DOMAIN
+from .const import CONF_TICKERS, CONF_TICKER_SYMBOL, DOMAIN, CONF_API_KEY, CONF_SECRET
 from .market_symbol import MarketSymbol
 
 SCAN_INTERVAL = timedelta(minutes=5)
@@ -25,6 +25,8 @@ TICKER_SCHEMA = vol.Schema(
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
+        vol.Optional(CONF_API_KEY): cv.string,
+        vol.Optional(CONF_SECRET): cv.string,
         vol.Required(CONF_TICKERS): vol.All(cv.ensure_list, [TICKER_SCHEMA]),
     }
 )
@@ -37,13 +39,16 @@ async def async_setup_platform(
 ) -> None:
     """Set up the sensor platform."""
 
-    cryptocom_data = CryptoComData(hass)
+    cryptocom_data = CryptoComData(hass, config.get(CONF_API_KEY, None), config.get(CONF_SECRET, None))
     await cryptocom_data.async_setup()
     hass.data[DOMAIN] = cryptocom_data
 
     sensors = []
-    for data in config[CONF_TICKERS]:
-        config_symbol = data[CONF_TICKER_SYMBOL]
+    if cryptocom_data.balance_coordinator:
+        sensors.append(VirtualBalanceSensor(cryptocom_data, "Virtual Balance", "total"))
+        sensors.append(VirtualBalanceSensor(cryptocom_data, "Free Balance", "free"))
+    for ticker_config in config[CONF_TICKERS]:
+        config_symbol = ticker_config[CONF_TICKER_SYMBOL]
         try:
             symbol = MarketSymbol.try_from_string(config_symbol)
             sensors.append(LastPriceSensor(cryptocom_data, symbol))
@@ -114,8 +119,8 @@ class LastPriceSensor(CoordinatorEntity, CurrencySensor):
 
 class SimpleMovingAverage(CoordinatorEntity, CurrencySensor):
     def __init__(self, data: CryptoComData, market_symbol: MarketSymbol, period: int) -> None:
-        CoordinatorEntity.__init__(self, data.candlesticks_coordinator(market_symbol))
         CurrencySensor.__init__(self, data, market_symbol)
+        CoordinatorEntity.__init__(self, data.candlesticks_coordinator(market_symbol))
         self._data = data
         self._period = period
         self.name_postfix = f"sma_{period}_1h"
@@ -137,3 +142,44 @@ class SimpleMovingAverage(CoordinatorEntity, CurrencySensor):
             self._attr_native_value = None
             self.async_write_ha_state()
             return
+        
+class VirtualBalanceSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, data: CryptoComData, name: str, property: str) -> None:
+        SensorEntity.__init__(self) 
+        CoordinatorEntity.__init__(self, data.balance_coordinator)
+        self._data = data
+        self._name = name
+        self._property = property
+
+    @property
+    def unique_id(self) -> str:
+        return self.name.lower().replace(' ', '_')
+
+    @property
+    def name(self) -> str:
+        return f"Crypto.com {self._name}"
+
+    @property
+    def native_unit_of_measurement (self) -> str:
+        return "$"
+
+    @property
+    def icon(self) -> str:
+        return "mdi:currency-usd"
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        total = self.coordinator.data[self._property]
+        virtual_total = total.get('USD', 0)
+        tickers = self._data.tickers_coordinator.data
+        if tickers:
+            for currency in total.keys():
+                if currency == 'USD':
+                    continue
+                currency_ticker = tickers.get(f'{currency}/USD', None)
+                if currency_ticker:
+                    virtual_total = virtual_total + currency_ticker['last'] * total[currency]
+            self._attr_native_value = f"{virtual_total:.2f}"
+            self.async_write_ha_state()
+        else:
+            _LOGGER.debug("no ticker data yet")
