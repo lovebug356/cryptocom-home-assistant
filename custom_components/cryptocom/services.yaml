@@ -1,0 +1,33 @@
+market_buy_and_limit_sell:
+  name: Market buy and limit sell
+  description: Create a market buy order with a buy_percentage of the available free quote currency. Then, sell this amount for a certain profit.
+  fields:
+    symbol:
+      name: Symbol
+      required: true
+      selector:
+        select:
+          options:
+            - "BTC/USD"
+            - "CRO/USD"
+            - "ETH/USD"
+    buy_percentage:
+      name: Buy Percentage
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    sell_profit:
+      name: Sell Profit
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
