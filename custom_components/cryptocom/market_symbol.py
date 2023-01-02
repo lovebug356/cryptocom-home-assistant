@@ -1,9 +1,13 @@
 from __future__ import annotations
+from dataclasses import dataclass
 
+@dataclass
 class MarketSymbol:
-    def __init__(self, base: str, quote: str) -> None:
-        self.base = base
-        self.quote = quote
+    base: str
+    quote: str
+
+    def __str__(self) -> str:
+        return self.ccxt_symbol
 
     @staticmethod
     def try_from_string(data: str) -> MarketSymbol:

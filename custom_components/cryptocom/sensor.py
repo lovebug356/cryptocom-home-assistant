@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 import voluptuous as vol
 from datetime import timedelta
 
@@ -12,7 +13,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.helpers.config_validation as cv
 
-from .data import CryptoComData
+from .data import CandlesticksCoordinator, CryptoComData, TickersCoordinator
 from .const import CONF_TICKERS, CONF_TICKER_SYMBOL, DOMAIN, CONF_API_KEY, CONF_SECRET
 from .market_symbol import MarketSymbol
 
@@ -37,11 +38,11 @@ async def async_setup_platform(
     add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up the sensor platform."""
+    if not hass.data[DOMAIN]:
+        _LOGGER.error("I tought the component setup was done first!!!, I will stop setting up the sensor platform.")
+        return
 
-    cryptocom_data = CryptoComData(hass, config.get(CONF_API_KEY, None), config.get(CONF_SECRET, None))
-    await cryptocom_data.async_setup()
-    hass.data[DOMAIN] = cryptocom_data
+    cryptocom_data: CryptoComData = hass.data[DOMAIN]
 
     sensors = []
     if cryptocom_data.balance_coordinator:
@@ -51,11 +52,12 @@ async def async_setup_platform(
         config_symbol = ticker_config[CONF_TICKER_SYMBOL]
         try:
             symbol = MarketSymbol.try_from_string(config_symbol)
-            sensors.append(LastPriceSensor(cryptocom_data, symbol))
-            sensors.append(SimpleMovingAverage(cryptocom_data, symbol, 25))
-            sensors.append(SimpleMovingAverage(cryptocom_data, symbol, 50))
-            sensors.append(SimpleMovingAverage(cryptocom_data, symbol, 100))
-            sensors.append(SimpleMovingAverage(cryptocom_data, symbol, 200))
+            sensors.append(LastPriceSensor(cryptocom_data, cryptocom_data.tickers_coordinator, symbol))
+            candlestick_coordinator = await cryptocom_data.candlesticks_coordinator(symbol)
+            sensors.append(SimpleMovingAverage(cryptocom_data, candlestick_coordinator, symbol, 25))
+            sensors.append(SimpleMovingAverage(cryptocom_data, candlestick_coordinator, symbol, 50))
+            sensors.append(SimpleMovingAverage(cryptocom_data, candlestick_coordinator, symbol, 100))
+            sensors.append(SimpleMovingAverage(cryptocom_data, candlestick_coordinator, symbol, 200))
         except Exception as err:
             _LOGGER.warn(f"failed to parse '{config_symbol}' as valid market symbol: ${err}")
 
@@ -99,49 +101,45 @@ class CurrencySensor(SensorEntity):
 class LastPriceSensor(CoordinatorEntity, CurrencySensor):
     name_postfix: str = 'last_price'
 
-    def __init__(self, data: CryptoComData, market_symbol: MarketSymbol) -> None:
-        CoordinatorEntity.__init__(self, data.tickers_coordinator)
+    def __init__(self,
+            data: CryptoComData,
+            tickers_coordinator: TickersCoordinator,
+            market_symbol: MarketSymbol) -> None:
+        CoordinatorEntity.__init__(self, tickers_coordinator)
         CurrencySensor.__init__(self, data, market_symbol)
-        self._data = data
 
     @property
-    def state(self) -> str:
-        return self._attr_native_value
+    def tickers_coordinator(self) -> TickersCoordinator:
+        return self.coordinator
 
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        ticker = self._data.tickers_coordinator.data.get(self._market_symbol.ccxt_symbol, None)
-        if ticker:
-            self._attr_native_value = self.round_value(ticker['last'])
-            self.async_write_ha_state()
-            return
-        _LOGGER.warn(f"{self._market_symbol.ccxt_symbol} not found in the ticker list")
+    @property
+    def native_value(self) -> Optional[str]:
+        last_price = self.tickers_coordinator.query_last_price(self._market_symbol)
+        if not last_price:
+            _LOGGER.warn("%s not found in the ticker list", self._market_symbol)
+            return None
+        return self.round_value(last_price)
 
 class SimpleMovingAverage(CoordinatorEntity, CurrencySensor):
-    def __init__(self, data: CryptoComData, market_symbol: MarketSymbol, period: int) -> None:
+    def __init__(self,
+            data: CryptoComData,
+            candlestick_coordinator: CandlesticksCoordinator,
+            market_symbol: MarketSymbol,
+            period: int) -> None:
         CurrencySensor.__init__(self, data, market_symbol)
-        CoordinatorEntity.__init__(self, data.candlesticks_coordinator(market_symbol))
-        self._data = data
+        CoordinatorEntity.__init__(self, candlestick_coordinator)
         self._period = period
         self.name_postfix = f"sma_{period}_1h"
 
     @property
-    def state(self) -> str:
-        return self._attr_native_value
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
+    def native_value(self) -> Optional[str]:
         close_price_data = self.coordinator.data[-1 * self._period:]
         if len(close_price_data) == self._period:
             list = [a[3] for a in close_price_data]
-            self._attr_native_value = self.round_value(sum(list) / len(list))
-            self.async_write_ha_state()
-            return
+            return self.round_value(sum(list) / len(list))
         else:
-            _LOGGER.debug("not enough historic data for %s, need %d got %d", self._market_symbol.ccxt_symbol, self._period, len(close_price_data))
-            self._attr_native_value = None
-            self.async_write_ha_state()
-            return
+            _LOGGER.debug("not enough historic data for %s, need %d got %d", self._market_symbol, self._period, len(close_price_data))
+            return None
         
 class VirtualBalanceSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, data: CryptoComData, name: str, property: str) -> None:
@@ -167,8 +165,8 @@ class VirtualBalanceSensor(CoordinatorEntity, SensorEntity):
     def icon(self) -> str:
         return "mdi:currency-usd"
 
-    @callback
-    def _handle_coordinator_update(self) -> None:
+    @property
+    def native_value(self) -> Optional[str]:
         total = self.coordinator.data[self._property]
         virtual_total = total.get('USD', 0)
         tickers = self._data.tickers_coordinator.data
@@ -179,7 +177,7 @@ class VirtualBalanceSensor(CoordinatorEntity, SensorEntity):
                 currency_ticker = tickers.get(f'{currency}/USD', None)
                 if currency_ticker:
                     virtual_total = virtual_total + currency_ticker['last'] * total[currency]
-            self._attr_native_value = f"{virtual_total:.2f}"
-            self.async_write_ha_state()
+            return f"{virtual_total:.2f}"
         else:
             _LOGGER.debug("no ticker data yet")
+            return None
