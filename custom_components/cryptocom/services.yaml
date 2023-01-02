@@ -13,6 +13,7 @@ market_buy_and_limit_sell:
             - "ETH/USD"
     buy_percentage:
       name: Buy Percentage
+      description: The amount to buy as a percentage of the available free quote currency. 
       required: true
       selector:
         number:
@@ -23,6 +24,7 @@ market_buy_and_limit_sell:
           mode: slider
     sell_profit:
       name: Sell Profit
+      description: The sell price as a profit percentage of the buy price.
       required: true
       selector:
         number:
