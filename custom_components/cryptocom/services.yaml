@@ -4,13 +4,10 @@ market_buy_and_limit_sell:
   fields:
     symbol:
       name: Symbol
+      description: The symbol on which to create orders.
       required: true
       selector:
-        select:
-          options:
-            - "BTC/USD"
-            - "CRO/USD"
-            - "ETH/USD"
+        text:
     buy_percentage:
       name: Buy Percentage
       description: The amount to buy as a percentage of the available free quote currency. 
